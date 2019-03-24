@@ -1,0 +1,11 @@
+{
+    "python.pythonPath": "C:\\Program Files\\Python36\\python.exe",
+    "python.linting.pylintEnabled": true,
+    "python.linting.enabled": true,
+
+    "python.linting.pylintArgs":[
+        "--extension-pkg-whitelist=PyQt5",
+        "--diable=E1101",
+        "--diable=E1102",
+    ]
+}
