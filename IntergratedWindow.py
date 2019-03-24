@@ -11,8 +11,9 @@ from vtk import *
 from jplephem.spk import SPK
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
-#from PyQt5.QtWidgets import QMainWindow, QApplication, QSplitter, QFrame, QVBoxLayout, QStatusBar, QLabel, QCalendarWidget
-from PyQt5.QtWidgets import *
+from PyQt5.QtWidgets import QMainWindow, QApplication, QSplitter, QFrame, QWidget,\
+     QVBoxLayout, QHBoxLayout, QStatusBar, QLabel, QCalendarWidget, QPushButton
+# from PyQt5.QtWidgets import *
 from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 
 # TODO 减小体积
@@ -24,7 +25,8 @@ Colors = vtk.vtkNamedColors()
 class MainWindow(QMainWindow):
     displaying: bool = False  # 是否在循环刷新vtk控件
     frame_rate = 25  # 帧率
-    delta_tdb = 0.2  # 帧之间的时间差  TODO 调整速率
+    origion_delta_tdb = 0.05
+    delta_tdb = origion_delta_tdb  # 帧之间的时间差  TODO 调整速率
 
     def __init__(self, parent=None):
         super(MainWindow, self).__init__(parent)
@@ -40,9 +42,14 @@ class MainWindow(QMainWindow):
         self._insertPlanets()  # 插入行星显示主体
         # 初始化 UI
         self._initUI()
+        self._update_data()  # 显示当前
         # connections
         self.okButton.clicked.connect(self._on_OKButton_clicked)
         self.calendar.selectionChanged.connect(self._onCalChanged)
+        self.speedButton_slower.clicked.connect(self._on_speedButton_slower)
+        self.speedButton_origion.clicked.connect(self._on_speedButton_origion)
+        self.speedButton_faster.clicked.connect(self._on_speedButton_faster)
+        # log
         log("MainWindow Ready.", "info")
         self.window_status_label.setText("Ready")
         return
@@ -88,20 +95,22 @@ class MainWindow(QMainWindow):
         lLayout.addWidget(lLabel)  # 1
         lLayout.setStretch(1, 1)
         # 日历
-        # self.calendar = QCalendarWidget()
-        # self.calendar.setGridVisible(True)
-        # self.calendar.setDateRange(QDate(1900, 1, 1), QDate(2195, 12, 24))
-        # self.calendar.setMaximumHeight(300)
-        # self.calendar.setMinimumWidth(30)
+        self.calendar = QCalendarWidget()
+        self.calendar.setGridVisible(True)
+        self.calendar.setDateRange(QDate(1900, 1, 1), QDate(2195, 12, 24))
+        self.calendar.setMaximumHeight(300)
         # lLayout.addWidget(self.calendar)  # 2
+        # 速度控制控件
+        self.speed_box = QWidget()
         self.speed_layout = QHBoxLayout()
+        self.speed_box.setLayout(self.speed_layout)
+        self.speedButton_slower = QPushButton("<<<")
         self.speedButton_origion = QPushButton("▶")
         self.speedButton_faster = QPushButton(">>>")
-        self.speedButton_slower = QPushButton("<<<")
+        self.speed_layout.addWidget(self.speedButton_slower)
         self.speed_layout.addWidget(self.speedButton_origion)
         self.speed_layout.addWidget(self.speedButton_faster)
-        self.speed_layout.addWidget(self.speedButton_slower)
-        lLayout.addWidget(self.speed_layout)
+        lLayout.addWidget(self.speed_box)
         lLayout.setStretch(2, 4)
         # 日历标签
         self.calendar_label = QLabel()
@@ -110,13 +119,13 @@ class MainWindow(QMainWindow):
         self._onCalChanged()
         lLayout.addWidget(self.calendar_label)  # 3
         lLayout.setStretch(3, 1)
-
+        # OK按钮
         self.okButton = QPushButton("OK")
         self.okButton.setMinimumHeight(50)
         self.okButton.setFont(QFont("Microsoft YaHei", 20, QFont.Bold))
         lLayout.addWidget(self.okButton)  # 4
         lLayout.setStretch(4, 1)
-
+        # 空标签(为了占地方)
         tempLabel = QLabel()
         tempLabel.setMaximumHeight(50)
         lLayout.addWidget(tempLabel)  # 5
@@ -158,14 +167,14 @@ class MainWindow(QMainWindow):
         if not self.displaying:
             self.displaying = True
             log("go, displaying=" + self.displaying.__str__(), "debug")
-            self._display_circle()
+            self._display_loop()
         else:  # displaying
             self.displaying = False
             log("pause, displaying=" + self.displaying.__str__(), "debug")
         QApplication.processEvents()
         return
 
-    def _display_circle(self):
+    def _display_loop(self):
         log("start displaying", "info")
         self.window_status_label.setText("Displaying")
         while self.displaying:
@@ -188,7 +197,6 @@ class MainWindow(QMainWindow):
         current_tdb = self.dataProvider.current_tdb
         new_tdb = current_tdb + self.delta_tdb
         self.dataProvider.update_to_tdb(new_tdb)
-        # todo
         return
 
     def _refresh_vtkDisplay(self):
@@ -204,6 +212,21 @@ class MainWindow(QMainWindow):
         tdb = date2TDB(date)
         self.calendar_label.setText("%s  TDB = %.2f" % (str(date.toPyDate()), tdb))
         # todo
+
+    def _on_speedButton_slower(self):
+        if self.delta_tdb - 0.05 > 0:
+            self.delta_tdb -= 0.05
+        elif self.delta_tdb - 0.01 > 0:
+            self.delta_tdb -= 0.01
+        log("speed slower, delta_tdb=%f" % self.delta_tdb, "info")
+    
+    def _on_speedButton_origion(self):
+        self.delta_tdb = self.origion_delta_tdb
+        log("speed origion", "info")
+    
+    def _on_speedButton_faster(self):
+        self.delta_tdb += 0.05
+        log("speed faster, delta_tdb=%f" % self.delta_tdb, "info")
 
 
 # VTK控件对象
