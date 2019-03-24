@@ -46,9 +46,11 @@ class MainWindow(QMainWindow):
         # connections
         self.okButton.clicked.connect(self._on_OKButton_clicked)
         self.calendar.selectionChanged.connect(self._onCalChanged)
+        self.speedButton_moreSlower.clicked.connect(self._on_speedButton_moreSlower)
         self.speedButton_slower.clicked.connect(self._on_speedButton_slower)
         self.speedButton_origion.clicked.connect(self._on_speedButton_origion)
         self.speedButton_faster.clicked.connect(self._on_speedButton_faster)
+        self.speedButton_moreFaster.clicked.connect(self._on_speedButton_moreFaster)
         # log
         log("MainWindow Ready.", "info")
         self.window_status_label.setText("Ready")
@@ -104,12 +106,22 @@ class MainWindow(QMainWindow):
         self.speed_box = QWidget()
         self.speed_layout = QHBoxLayout()
         self.speed_box.setLayout(self.speed_layout)
-        self.speedButton_slower = QPushButton("<<<")
+        speed_button_width = 40
+        self.speedButton_moreSlower = QPushButton("<<<")
+        self.speedButton_moreSlower.setMaximumWidth(speed_button_width)
+        self.speedButton_slower = QPushButton("<")
+        self.speedButton_slower.setMaximumWidth(speed_button_width)
         self.speedButton_origion = QPushButton("▶")
-        self.speedButton_faster = QPushButton(">>>")
+        self.speedButton_origion.setMaximumWidth(speed_button_width)
+        self.speedButton_faster = QPushButton(">")
+        self.speedButton_faster.setMaximumWidth(speed_button_width)
+        self.speedButton_moreFaster = QPushButton(">>>")
+        self.speedButton_moreFaster.setMaximumWidth(speed_button_width)
+        self.speed_layout.addWidget(self.speedButton_moreSlower)
         self.speed_layout.addWidget(self.speedButton_slower)
         self.speed_layout.addWidget(self.speedButton_origion)
         self.speed_layout.addWidget(self.speedButton_faster)
+        self.speed_layout.addWidget(self.speedButton_moreFaster)
         lLayout.addWidget(self.speed_box)
         lLayout.setStretch(2, 4)
         # 日历标签
@@ -213,11 +225,16 @@ class MainWindow(QMainWindow):
         self.calendar_label.setText("%s  TDB = %.2f" % (str(date.toPyDate()), tdb))
         # todo
 
+    def _on_speedButton_moreSlower(self):
+        step = 0.5
+        if self.delta_tdb - step > 0:
+            self.delta_tdb -= step
+        log("speed more slower, delta_tdb=%f" % self.delta_tdb, "info")
+
     def _on_speedButton_slower(self):
-        if self.delta_tdb - 0.05 > 0:
-            self.delta_tdb -= 0.05
-        elif self.delta_tdb - 0.01 > 0:
-            self.delta_tdb -= 0.01
+        step = 0.05
+        if self.delta_tdb - step > 0:
+            self.delta_tdb -= step
         log("speed slower, delta_tdb=%f" % self.delta_tdb, "info")
     
     def _on_speedButton_origion(self):
@@ -225,8 +242,14 @@ class MainWindow(QMainWindow):
         log("speed origion", "info")
     
     def _on_speedButton_faster(self):
-        self.delta_tdb += 0.05
+        step = 0.05
+        self.delta_tdb += step
         log("speed faster, delta_tdb=%f" % self.delta_tdb, "info")
+
+    def _on_speedButton_moreFaster(self):
+        step = 0.5
+        self.delta_tdb += step
+        log("speed more faster, delta_tdb=%f" % self.delta_tdb, "info")
 
 
 # VTK控件对象
