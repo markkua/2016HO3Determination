@@ -21,12 +21,14 @@ from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 
 Colors = vtk.vtkNamedColors()
 
+# TODO 同步显示TDB和日期
+
 
 class MainWindow(QMainWindow):
     displaying: bool = False  # 是否在循环刷新vtk控件
     frame_rate = 25  # 帧率
     origion_delta_tdb = 0.05
-    delta_tdb = origion_delta_tdb  # 帧之间的时间差  TODO 调整速率
+    delta_tdb = origion_delta_tdb
 
     def __init__(self, parent=None):
         super(MainWindow, self).__init__(parent)
@@ -36,13 +38,13 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(QIcon("data/icon.jpg"))
         # 初始化数据
         self.dataProvider = DataProvider("data/de430.bsp", "data/status.eph")
-        self.dataProvider.current_tdb = date2TDB(QDate.currentDate())  # todo  当前日期
+        self.dataProvider.current_tdb = date2TDB(QDate.currentDate())  # 设置为当前日期
         # 初始化VTK控件
         self.vtkWidget = MyVTKWidget()  # VTK控件对象
-        self._insertPlanets()  # 插入行星显示主体
+        self._init_planets()  # 插入行星显示主体
+        self._update_data()  # 更新球体坐标到当前日期
         # 初始化 UI
         self._initUI()
-        self._update_data()  # 显示当前
         # connections
         self.okButton.clicked.connect(self._on_OKButton_clicked)
         self.calendar.selectionChanged.connect(self._onCalChanged)
@@ -85,14 +87,14 @@ class MainWindow(QMainWindow):
         # 大标题2016HO3
         lLabel0 = QLabel()
         lLabel0.setText("2016HO3")
-        lLabel0.setFont(QFont("Microsoft YaHei", 40, QFont.Bold))
+        lLabel0.setFont(QFont("Microsoft YaHei", 30, QFont.Bold))
         lLabel0.setAlignment(Qt.AlignCenter)
         lLayout.addWidget(lLabel0)  # 0
         lLayout.setStretch(0, 1.5)
         # Select start date
         lLabel = QLabel()
-        lLabel.setText("Select start date: ")
-        lLabel.setFont(QFont("Microsoft YaHei", 20, QFont.Bold))
+        # lLabel.setText("Select start date: ")
+        # lLabel.setFont(QFont("Microsoft YaHei", 20, QFont.Bold))
         lLabel.setAlignment(Qt.AlignCenter)
         lLayout.addWidget(lLabel)  # 1
         lLayout.setStretch(1, 1)
@@ -106,7 +108,7 @@ class MainWindow(QMainWindow):
         self.speed_box = QWidget()
         self.speed_layout = QHBoxLayout()
         self.speed_box.setLayout(self.speed_layout)
-        speed_button_width = 40
+        speed_button_width = 40  # 按钮宽度
         self.speedButton_moreSlower = QPushButton("<<<")
         self.speedButton_moreSlower.setMaximumWidth(speed_button_width)
         self.speedButton_slower = QPushButton("<")
@@ -132,7 +134,7 @@ class MainWindow(QMainWindow):
         lLayout.addWidget(self.calendar_label)  # 3
         lLayout.setStretch(3, 1)
         # OK按钮
-        self.okButton = QPushButton("OK")
+        self.okButton = QPushButton("▶")
         self.okButton.setMinimumHeight(50)
         self.okButton.setFont(QFont("Microsoft YaHei", 20, QFont.Bold))
         lLayout.addWidget(self.okButton)  # 4
@@ -155,22 +157,25 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(splitter_main)
         return
 
-    def _insertPlanets(self):
+    def _init_planets(self):
         # 太阳
         self.vtkWidget.renderer.AddActor(
             self.dataProvider.buildSphereSource('Sun', np.array([0, 0, 0]), 0.2, "Yellow"))
+        
+        
+        
         # 地球
         self.vtkWidget.renderer.AddActor(
-            self.dataProvider.buildSphereSource('Earth', np.array([100, 0, 0]), 0.09, "SkyBlue"))
+            self.dataProvider.buildSphereSource('Earth', np.array([0, 0, 0]), 0.09, "SkyBlue"))
         # 2016HO3
         self.vtkWidget.renderer.AddActor(
-            self.dataProvider.buildSphereSource('2016HO3', np.array([100, 1, 0]), 0.03, "Pink"))
+            self.dataProvider.buildSphereSource('2016HO3', np.array([0, 1, 0]), 0.03, "Pink"))
         # Mercury
         self.vtkWidget.renderer.AddActor(
-            self.dataProvider.buildSphereSource('Mercury', np.array([100, 1, 0]), 0.05, "Gold"))
+            self.dataProvider.buildSphereSource('Mercury', np.array([0, 1, 0]), 0.05, "Gold"))
         # Venus
         self.vtkWidget.renderer.AddActor(
-            self.dataProvider.buildSphereSource('Venus', np.array([100, 1, 0]), 0.04, "Green"))
+            self.dataProvider.buildSphereSource('Venus', np.array([0, 1, 0]), 0.04, "Green"))
         # TODO 改半径，改为实际大小
         return None
 
@@ -178,10 +183,12 @@ class MainWindow(QMainWindow):
         log("OK clicked", "info")
         if not self.displaying:
             self.displaying = True
+            self.okButton.setText("||")
             log("go, displaying=" + self.displaying.__str__(), "debug")
             self._display_loop()
         else:  # displaying
             self.displaying = False
+            self.okButton.setText("▶")
             log("pause, displaying=" + self.displaying.__str__(), "debug")
         QApplication.processEvents()
         return
@@ -212,10 +219,9 @@ class MainWindow(QMainWindow):
         return
 
     def _refresh_vtkDisplay(self):
-        self.window_status_label.setText("refresh")
         self.vtkWidget.GetRenderWindow().Render()  # 刷新
         # Show current tdb
-        self.statusBar.showMessage("TDB=%.4f" % self.dataProvider.current_tdb)
+        self.vtkWidget.commentTextActor.SetInput("TDB=%.4f" % self.dataProvider.current_tdb)
         QApplication.processEvents()
         return
 
@@ -225,14 +231,18 @@ class MainWindow(QMainWindow):
         self.calendar_label.setText("%s  TDB = %.2f" % (str(date.toPyDate()), tdb))
         # todo
 
+    # TODO 重新设置速率步长
+    large_step = 0.3
+    small_step = 0.1
+    
     def _on_speedButton_moreSlower(self):
-        step = 0.5
+        step = self.large_step
         if self.delta_tdb - step > 0:
             self.delta_tdb -= step
         log("speed more slower, delta_tdb=%f" % self.delta_tdb, "info")
 
     def _on_speedButton_slower(self):
-        step = 0.05
+        step = self.small_step
         if self.delta_tdb - step > 0:
             self.delta_tdb -= step
         log("speed slower, delta_tdb=%f" % self.delta_tdb, "info")
@@ -242,14 +252,18 @@ class MainWindow(QMainWindow):
         log("speed origion", "info")
     
     def _on_speedButton_faster(self):
-        step = 0.05
+        step = self.small_step
         self.delta_tdb += step
         log("speed faster, delta_tdb=%f" % self.delta_tdb, "info")
 
     def _on_speedButton_moreFaster(self):
-        step = 0.5
+        step = self.large_step
         self.delta_tdb += step
         log("speed more faster, delta_tdb=%f" % self.delta_tdb, "info")
+    
+    def closeEvent(self, *args, **kwargs):
+        log("Window Closed.", "Info")
+        exit()
 
 
 # VTK控件对象
@@ -260,7 +274,8 @@ class MyVTKWidget(QVTKRenderWindowInteractor):
         self.GetRenderWindow().AddRenderer(self.renderer)
         self.interactor = self.GetRenderWindow().GetInteractor()
         # self.interactor.SetInteractorStyle(None)  # 禁用交互
-        # todo 相机
+        
+        # 相机
         camera = vtk.vtkCamera()
         camera.SetViewAngle(40)
         camera.SetFocalPoint(0, 0, 0)
@@ -268,6 +283,12 @@ class MyVTKWidget(QVTKRenderWindowInteractor):
         camera.SetViewUp(0, 0, 1)
         # print(camera)
         self.renderer.SetActiveCamera(camera)
+        
+        # 文字注记
+        self.commentTextActor = vtkTextActor()
+        self.commentTextActor.SetDisplayPosition(0, 0)
+        self.commentTextActor.SetInput("Commont")
+        self.renderer.AddActor(self.commentTextActor)
 
 
 # 读取2016HO3的文本星历
@@ -275,7 +296,7 @@ class EphemerisReader:
     """ 读取星历文件 """
     def __init__(self, filename: str):
         self.filename = filename
-        print("ephReader filename = %s" % self.filename)  # TODO test
+        log("ephReader filename = %s" % self.filename, "debug")
         with open(self.filename, 'r') as file:
             self.content = file.readlines()
         self.min_tdb, self.max_tdb = self._get_tdb_range()
@@ -370,7 +391,7 @@ class DataProvider:
         self._ephReader = EphemerisReader(eph_file)
         self.scale = 1e-8  # 缩放尺度
         self.min_tdb, self.max_tdb = self._ephReader.min_tdb, self._ephReader.max_tdb
-        self.current_tdb = 0  # todo
+        self.current_tdb = 0
 
     def buildSphereSource(self, key: str, Center: np.array(3), radius: float, color: str) -> vtk.vtkActor:
         if key in self._sphereSourceDic.keys():
@@ -406,24 +427,25 @@ class DataProvider:
         return
 
 
-def date2TDB(date: QDate):
+def date2TDB(date):
         # 2458551.000000000 = A.D. 2019-Mar-08
         defaultTDB = 2458551
         defaultDate = QDate(2019, 3, 8)
         tdb = defaultTDB + defaultDate.daysTo(date)
         return tdb
 
+
 # 输出日志的函数
-def log(log: str, level: str):
+def log(message: str, level: str):
     level = level.lower()
     if level == "debug":
-        print("[Debug] %s" % log)
+        print("[Debug] %s" % message)
     elif level == "info":
-        print("[Info]  %s" % log)
+        print("[Info]  %s" % message)
     elif level == "warn":
-        print("[Warn]  %s" % log)
+        print("[Warn]  %s" % message)
     elif level == "error":
-        print("[error] %s" % log)
+        print("[error] %s" % message)
     else:
         print("[error] Log level error")
 
