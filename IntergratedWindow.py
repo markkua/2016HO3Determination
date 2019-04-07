@@ -1,21 +1,26 @@
 # python3
 # -*- coding: utf-8 -*-
 
-import math
+from math import asin, acos, pi
 import sys
 import time
 from typing import List
 
 import numpy as np
-from vtk import *
+from vtk import *  # TODO 轻量化
 from jplephem.spk import SPK
+
+import pandas as pd
+import spiceypy as spice
+from numpy.linalg import norm
+from scipy.integrate import solve_ivp
+
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import QMainWindow, QApplication, QSplitter, QFrame, QWidget,\
      QVBoxLayout, QHBoxLayout, QStatusBar, QLabel, QCalendarWidget, QPushButton
 # from PyQt5.QtWidgets import *
 from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
-
 # TODO 减小体积
 
 
@@ -159,23 +164,28 @@ class MainWindow(QMainWindow):
 
     def _init_planets(self):
         # 太阳
-        self.vtkWidget.renderer.AddActor(
-            self.dataProvider.buildSphereSource('Sun', np.array([0, 0, 0]), 0.2, "Yellow"))
+        sun_actor = self.dataProvider.build_sphere_actor('Sun', np.array([0, 0, 0]), 0.2, "Yellow")
         
+        self.vtkWidget.renderer.AddActor(sun_actor)
+        # 光照
+        sun_light = vtkLight()
+        sun_light.SetColor(1, 1, 1)
+        sun_light.SetPosition(0, 0, 0)
+        # self.vtkWidget.renderer.AddLight(sun_light)
         
         
         # 地球
         self.vtkWidget.renderer.AddActor(
-            self.dataProvider.buildSphereSource('Earth', np.array([0, 0, 0]), 0.09, "SkyBlue"))
+            self.dataProvider.build_sphere_actor('Earth', np.array([0, 0, 0]), 0.09, "SkyBlue"))
         # 2016HO3
         self.vtkWidget.renderer.AddActor(
-            self.dataProvider.buildSphereSource('2016HO3', np.array([0, 1, 0]), 0.03, "Pink"))
+            self.dataProvider.build_sphere_actor('2016HO3', np.array([0, 1, 0]), 0.03, "Pink"))
         # Mercury
         self.vtkWidget.renderer.AddActor(
-            self.dataProvider.buildSphereSource('Mercury', np.array([0, 1, 0]), 0.05, "Gold"))
+            self.dataProvider.build_sphere_actor('Mercury', np.array([0, 1, 0]), 0.05, "Gold"))
         # Venus
         self.vtkWidget.renderer.AddActor(
-            self.dataProvider.buildSphereSource('Venus', np.array([0, 1, 0]), 0.04, "Green"))
+            self.dataProvider.build_sphere_actor('Venus', np.array([0, 1, 0]), 0.04, "Green"))
         # TODO 改半径，改为实际大小
         return None
 
@@ -279,7 +289,7 @@ class MyVTKWidget(QVTKRenderWindowInteractor):
         camera = vtk.vtkCamera()
         camera.SetViewAngle(40)
         camera.SetFocalPoint(0, 0, 0)
-        camera.SetPosition(4, 0, 5)
+        camera.SetPosition(4, 0, 3)
         camera.SetViewUp(0, 0, 1)
         # print(camera)
         self.renderer.SetActiveCamera(camera)
@@ -383,6 +393,7 @@ class BspReader:
         return position
 
 
+# 为vtk管理、更新数据的部件
 class DataProvider:
     def __init__(self, bsp_file="data/de430.bsp", eph_file="data/status.eph"):
         # data
@@ -393,7 +404,7 @@ class DataProvider:
         self.min_tdb, self.max_tdb = self._ephReader.min_tdb, self._ephReader.max_tdb
         self.current_tdb = 0
 
-    def buildSphereSource(self, key: str, Center: np.array(3), radius: float, color: str) -> vtk.vtkActor:
+    def build_sphere_actor(self, key: str, Center: np.array(3), radius: float, color: str) -> vtk.vtkActor:
         if key in self._sphereSourceDic.keys():
             print("sphereSource already exists, can not insert " + key)
             return vtk.vtkActor()
@@ -427,6 +438,167 @@ class DataProvider:
         return
 
 
+# 轨道积分器
+class EquationBuilder:
+    def __init__(self):
+        self.P_Solar = 4.56e-6
+        self.debug_info = []
+        
+        self.PARAM = {
+            "Ref_Body": "Sun",
+            "Ref_Frame": "J2000",
+            "Surface_Area": 11.42,
+            "Satellite_Mass": 666,
+            "CR": 1.21,
+            "Radiation": True,
+            "Central_Body": "Sun",
+            "Occulting_Bodies": [
+                "Earth",
+                "Moon",
+                "Mercury",
+                "Venus"
+            ],
+            "Perturbation_Bodies": [
+                "Mercury Barycenter",
+                "Venus Barycenter",
+                "Earth Moon Barycenter",
+                "Mars Barycenter",
+                "Jupiter Barycenter",
+                "Saturn Barycenter",
+                "Uranus Barycenter",
+                "Neptune Barycenter",
+                "Pluto Barycenter",
+            ]
+            
+        }
+        
+        # spice.furnsh(r"data\latest_leapseconds.tls.pc")
+        # spice.furnsh(r"data\ORHM_______________00038.BSP")
+        spice.furnsh(r"data\de430.bsp")
+        # spice.furnsh(r"data\pck00010.tpc")
+        # spice.furnsh(r"data\Gravity.tpc")
+        # spice.furnsh(r"data\mar097.bsp")
+        
+    def perturbation(self, name, r_mex, t):
+        """
+        计算摄动天体加速度
+        :self.PARAM name: 摄动天体名称
+        :self.PARAM r_mex: 人造卫星（MEX）的位置向量
+        :self.PARAM t: TDB时刻
+        :return: 对应天体摄动加速度加速度[ax, ay, az]
+        """
+        r_body = spice.spkezr(name, t, self.PARAM["Ref_Frame"], 'None', self.PARAM["Ref_Body"])[0][:3]
+        r_cent = spice.spkezr(self.PARAM["Central_Body"], t, self.PARAM["Ref_Frame"], 'None', self.PARAM["Ref_Body"])[0][:3]
+        
+        GM_body = spice.bodvrd(name, "GM", 1)[1][0]
+        
+        r_body_mex = r_mex - r_body
+        r_cent_body = r_body - r_cent
+        
+        a = - GM_body * (r_cent_body / norm(r_cent_body) ** 3 + r_body_mex / norm(r_body_mex) ** 3)
+        return a
+    
+    def agl_between(self, vec1, vec2):
+        """
+        计算两向量之间的夹角
+        :self.PARAM vec1: 向量1
+        :self.PARAM vec2: 向量2
+        :return: 夹角弧度值
+        """
+        return acos(vec1 @ vec2 / norm(vec1) / norm(vec2))
+    
+    def body_shadow_function(self, r_mex, name, t):
+        """
+        计算阴影函数（shadow function）见英文教材P81 3.4.2
+        :self.PARAM r_mex: 人造卫星（MEX）的位置向量
+        :self.PARAM name: 遮挡天体的名称
+        :self.PARAM t: TDB时刻
+        :return: 阴影函数v
+        """
+        r_body = spice.spkezr(name, t, self.PARAM["Ref_Frame"], 'None', self.PARAM["Ref_Body"])[0][:3]
+        r_sun = spice.spkezr("Sun", t, self.PARAM["Ref_Frame"], 'None', self.PARAM["Ref_Body"])[0][:3]
+        r_body_mex = r_mex - r_body
+        r_mex_sun = r_sun - r_mex
+        
+        R_body = spice.bodvrd(name, "RADII", 3)[1][0]
+        RS = spice.bodvrd("Sun", "RADII", 3)[1][0]
+        a = asin(RS / norm(r_mex_sun))
+        b = asin(R_body / norm(r_body_mex))
+        c = self.agl_between(-1 * r_body_mex, r_mex_sun)
+        v = self.shadow_function(a, b, c)
+        return v
+    
+    def shadow_function(self, a, b, c):
+        """
+        由天体的apparent radius（a、b）和两者间的apparent separation计算阴影函数
+        见英文教材P82
+        :self.PARAM a: 被遮挡天体（太阳）的apparent radius
+        :self.PARAM b: 遮挡天体的apparent radius
+        :self.PARAM c: 被遮挡天体和遮挡天体的 apparent separation
+        :return: 阴影函数v
+        """
+        if abs(a - b) < c < a + b:
+            x = (c ** 2 + a ** 2 - b ** 2) / 2 / c
+            y = (a ** 2 - x ** 2) ** .5
+            A = a ** 2 * acos(x / a) + b ** 2 * acos((c - x) / b) - c * y
+            v = 1 - A / pi / a ** 2
+        elif c >= a + b:
+            # no occultation
+            v = 1
+        else:  # c <= abs(a - b)
+            if a < b:
+                # total occultation
+                v = 0
+            else:
+                # partial but maximum
+                v = 1 - b ** 2 / a ** 2
+        return v
+    
+    def solar_radiation_pressure(self, t, y):
+        """
+        计算太阳辐射光压 见英文版教材P79 3.75
+        :self.PARAM t: TDB时刻
+        :self.PARAM y: 对应时刻人造卫星的状态向量[x, y, z, vx, vy, vz]
+        :return: 太阳辐射光压加速度
+        """
+        r_mex = y[:3]
+        r_sun = spice.spkezr("Sun", t, self.PARAM["Ref_Frame"], 'None', self.PARAM["Ref_Body"])[0][:3]
+        r_sun_mex = r_mex - r_sun
+        
+        AU_km = spice.gdpool("AU", 0, 1)[0]
+        v = min([self.body_shadow_function(r_mex, name, t) for name in self.PARAM["Occulting_Bodies"]])
+        CR, A, m = [self.PARAM[i] for i in ["CR", "Surface_Area", "Satellite_Mass"]]
+        a = v * self.P_Solar * CR * A / m * AU_km ** 2 * r_sun_mex / norm(r_sun_mex) ** 3
+        
+        return a * 1e-3  # km * s^-2
+        pass
+    
+    def n_body_equation(self, t, y):
+        """
+        n体问题微分方程 y_dot = f(t, y)
+        见英文版教材P117
+        :self.PARAM t: 对应tdb时刻
+        :self.PARAM y: 对应时刻人造卫星的状态向量[x, y, z, vx, vy, vz]
+        :return: y_dot
+        """
+        y_dot = np.empty((6,))
+        y_dot[:3] = y[3:]
+        
+        r_mex = y[:3]
+        r_central = spice.spkezr(self.PARAM["Central_Body"], t, self.PARAM["Ref_Frame"], 'None', self.PARAM["Ref_Body"])[0][:3]
+        r_central_mex = r_mex - r_central
+        GM_central = spice.bodvrd(self.PARAM["Central_Body"], "GM", 1)[1][0]
+        a_central = - GM_central * r_central_mex / norm(r_central_mex) ** 3
+        perturbations = sum([self.perturbation(name, r_mex, t) for name in self.PARAM["Perturbation_Bodies"]])
+        y_dot[3:] = a_central + perturbations
+        
+        if self.PARAM["Radiation"]:
+            radiation_pressure = self.solar_radiation_pressure(t, y)
+            y_dot[3:] += radiation_pressure
+        
+        return y_dot  # v, a
+
+
 def date2TDB(date):
         # 2458551.000000000 = A.D. 2019-Mar-08
         defaultTDB = 2458551
@@ -441,13 +613,13 @@ def log(message: str, level: str):
     if level == "debug":
         print("[Debug] %s" % message)
     elif level == "info":
-        print("[Info]  %s" % message)
+        print("\033[0;36m[Info]  %s\033[0m" % message)
     elif level == "warn":
-        print("[Warn]  %s" % message)
+        print("\033[0;34m[Warn]  %s\033[0m" % message)
     elif level == "error":
-        print("[error] %s" % message)
+        print("\033[0;31m[error] %s\033[0m" % message)
     else:
-        print("[error] Log level error")
+        print("\033[0;31m[error] Log level error\033[0m")
 
 
 if __name__ == "__main__":
@@ -457,6 +629,12 @@ if __name__ == "__main__":
 
     win.show()
 
+    log("warn", "warn")
+    log("error", "error")
+    
+    # 开始运行
+    win.okButton.click()
+    
     win.vtkWidget.interactor.Initialize()
 
     sys.exit(app.exec_())
