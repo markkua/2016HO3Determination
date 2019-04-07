@@ -8,6 +8,7 @@ from typing import List
 
 import numpy as np
 from vtk import *  # TODO 轻量化
+from vtk import vtkPolyDataMapper, vtkVectorText, vtkFollower
 from jplephem.spk import SPK
 
 import pandas as pd
@@ -29,14 +30,14 @@ Colors = vtk.vtkNamedColors()
 # TODO 同步显示TDB和日期
 
 
-class MainWindow(QMainWindow):
+class MyMainWindow(QMainWindow):
     displaying: bool = False  # 是否在循环刷新vtk控件
     frame_rate = 25  # 帧率
-    origion_delta_tdb = 0.05
-    delta_tdb = origion_delta_tdb
+    origin_delta_tdb = 0.05
+    delta_tdb = origin_delta_tdb
 
     def __init__(self, parent=None):
-        super(MainWindow, self).__init__(parent)
+        super(MyMainWindow, self).__init__(parent)
         # 设置标题，大小，图标
         self.setWindowTitle("2016HO3")
         self.resize(1200, 700)
@@ -163,31 +164,58 @@ class MainWindow(QMainWindow):
         return
 
     def _init_planets(self):
+        # TODO 改半径，改为实际大小
         # 太阳
-        sun_actor = self.dataProvider.build_sphere_actor('Sun', np.array([0, 0, 0]), 0.2, "Yellow")
-        
-        self.vtkWidget.renderer.AddActor(sun_actor)
-        # 光照
-        sun_light = vtkLight()
-        sun_light.SetColor(1, 1, 1)
-        sun_light.SetPosition(0, 0, 0)
-        # self.vtkWidget.renderer.AddLight(sun_light)
-        
+        self._build_planet_actors('Sun', np.array([0, 0, 0]), 0.2, "White")
         
         # 地球
-        self.vtkWidget.renderer.AddActor(
-            self.dataProvider.build_sphere_actor('Earth', np.array([0, 0, 0]), 0.09, "SkyBlue"))
+        self._build_planet_actors('Earth', np.array([0, 0, 0]), 0.09, "SkyBlue")
         # 2016HO3
-        self.vtkWidget.renderer.AddActor(
-            self.dataProvider.build_sphere_actor('2016HO3', np.array([0, 1, 0]), 0.03, "Pink"))
+        self._build_planet_actors('2016HO3', np.array([0, 1, 0]), 0.03, "Pink")
         # Mercury
-        self.vtkWidget.renderer.AddActor(
-            self.dataProvider.build_sphere_actor('Mercury', np.array([0, 1, 0]), 0.05, "Gold"))
+        self._build_planet_actors('Mercury', np.array([0, 1, 0]), 0.05, "Gold")
         # Venus
-        self.vtkWidget.renderer.AddActor(
-            self.dataProvider.build_sphere_actor('Venus', np.array([0, 1, 0]), 0.04, "Green"))
-        # TODO 改半径，改为实际大小
+        self._build_planet_actors('Venus', np.array([0, 1, 0]), 0.04, "Green")
+
+        # 光照
+        # sun_light = vtkLight()
+        # sun_light.SetColor(1, 1, 1)
+        # sun_light.SetPosition(0, 0, 0)
+        # self.vtkWidget.renderer.AddLight(sun_light)
+        
         return None
+
+    def _build_planet_actors(self, key: str, Center: np.array(3), radius: float, color: str):
+        sphereSource = vtk.vtkSphereSource()
+        # Make the surface smooth.
+        sphereSource.SetPhiResolution(100)
+        sphereSource.SetThetaResolution(100)
+        mapper = vtk.vtkPolyDataMapper()
+        mapper.SetInputConnection(sphereSource.GetOutputPort())
+    
+        actor = vtk.vtkActor()
+        actor.SetMapper(mapper)
+        actor.GetProperty().SetColor(Colors.GetColor3d(color))
+        sphereSource.SetCenter(Center[0], Center[1], Center[2])
+        sphereSource.SetRadius(radius)
+    
+        # 标签
+        vText = vtkVectorText()
+        vText.SetText(key)
+        textMapper = vtkPolyDataMapper()
+        textMapper.SetInputConnection(vText.GetOutputPort())
+        textActor = vtkFollower()
+        textActor.SetMapper(textMapper)
+        textActor.SetScale(0.05)
+        # textActor.AddPosition(Center[0], Center[1], Center[2])
+        textActor.SetPosition(Center[0], Center[1], Center[2])
+        textActor.SetCamera(self.vtkWidget.renderer.GetActiveCamera())
+        
+        # 加入数据集
+        self.dataProvider.add_sphere_source(key, sphereSource, textActor)
+        self.vtkWidget.renderer.AddActor(actor)
+        self.vtkWidget.renderer.AddActor(textActor)
+        return
 
     def _on_OKButton_clicked(self):
         log("OK clicked", "info")
@@ -231,7 +259,7 @@ class MainWindow(QMainWindow):
     def _refresh_vtkDisplay(self):
         self.vtkWidget.GetRenderWindow().Render()  # 刷新
         # Show current tdb
-        self.vtkWidget.commentTextActor.SetInput("TDB=%.4f" % self.dataProvider.current_tdb)
+        self.vtkWidget.commentTextActor.SetInput("TDB=%.4f\ncomment" % self.dataProvider.current_tdb)
         QApplication.processEvents()
         return
 
@@ -258,7 +286,7 @@ class MainWindow(QMainWindow):
         log("speed slower, delta_tdb=%f" % self.delta_tdb, "info")
     
     def _on_speedButton_origion(self):
-        self.delta_tdb = self.origion_delta_tdb
+        self.delta_tdb = self.origin_delta_tdb
         log("speed origion", "info")
     
     def _on_speedButton_faster(self):
@@ -398,31 +426,49 @@ class DataProvider:
     def __init__(self, bsp_file="data/de430.bsp", eph_file="data/status.eph"):
         # data
         self._sphereSourceDic = {}  # 所有的行星的sphereSource
+        self._vTextActorDic = {}  # 行星的VectorText
         self._bspReader = BspReader(bsp_file)
         self._ephReader = EphemerisReader(eph_file)
         self.scale = 1e-8  # 缩放尺度
         self.min_tdb, self.max_tdb = self._ephReader.min_tdb, self._ephReader.max_tdb
         self.current_tdb = 0
 
-    def build_sphere_actor(self, key: str, Center: np.array(3), radius: float, color: str) -> vtk.vtkActor:
-        if key in self._sphereSourceDic.keys():
-            print("sphereSource already exists, can not insert " + key)
-            return vtk.vtkActor()
-        sphereSource = vtk.vtkSphereSource()
-        # Make the surface smooth.
-        sphereSource.SetPhiResolution(100)
-        sphereSource.SetThetaResolution(100)
-        mapper = vtk.vtkPolyDataMapper()
-        mapper.SetInputConnection(sphereSource.GetOutputPort())
-        actor = vtk.vtkActor()
-        actor.SetMapper(mapper)
-        actor.GetProperty().SetColor(Colors.GetColor3d(color))
-        sphereSource.SetCenter(Center[0], Center[1], Center[2])
-        sphereSource.SetRadius(radius)
-        # 加入数据字典
-        self._sphereSourceDic[key] = sphereSource
-        return actor
+    # def build_sphere_actor(self, key: str, Center: np.array(3), radius: float, color: str) -> vtk.vtkActor:
+    #     if key in self._sphereSourceDic.keys():
+    #         print("sphereSource already exists, can not insert " + key)
+    #         return vtk.vtkActor()
+    #     sphereSource = vtk.vtkSphereSource()
+    #     # Make the surface smooth.
+    #     sphereSource.SetPhiResolution(100)
+    #     sphereSource.SetThetaResolution(100)
+    #     mapper = vtk.vtkPolyDataMapper()
+    #     mapper.SetInputConnection(sphereSource.GetOutputPort())
+    #
+    #     actor = vtk.vtkActor()
+    #     actor.SetMapper(mapper)
+    #     actor.GetProperty().SetColor(Colors.GetColor3d(color))
+    #     sphereSource.SetCenter(Center[0], Center[1], Center[2])
+    #     sphereSource.SetRadius(radius)
+    #
+    #     # 标签
+    #     vText = vtkVectorText()
+    #     vText.SetText(key)
+    #     textMapper = vtkPolyDataMapper()
+    #     textMapper.SetInputConnection(vText.GetOutputPort())
+    #     textActor = vtkFollower()
+    #     textActor.SetMapper(textMapper)
+    #     textActor.SetScale(0.1, 0.1, 0.1)
+    #     textActor.AddPosition(Center[0], Center[1], Center[2])
+    #
+    #     # 加入数据字典
+    #     self._sphereSourceDic[key] = sphereSource
+    #
+    #     return actor, textActor
 
+    def add_sphere_source(self, key, sphereSource, text_actor):
+        self._sphereSourceDic[key] = sphereSource
+        self._vTextActorDic[key] = text_actor
+    
     def update_to_tdb(self, tdb: float):
         if not self.min_tdb <= tdb < self.max_tdb:
             print("dataProvider error: tdb out of range")
@@ -433,7 +479,9 @@ class DataProvider:
             else:
                 Center = self._bspReader.getPosition(key, tdb)
             Center *= self.scale
+            label_bias = self._sphereSourceDic[key].GetRadius()
             self._sphereSourceDic[key].SetCenter(Center[0], Center[1], Center[2])
+            self._vTextActorDic[key].SetPosition(Center[0]+label_bias, Center[1]+label_bias, Center[2])
         self.current_tdb = tdb
         return
 
@@ -625,12 +673,9 @@ def log(message: str, level: str):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
-    win = MainWindow()
+    win = MyMainWindow()
 
     win.show()
-
-    log("warn", "warn")
-    log("error", "error")
     
     # 开始运行
     win.okButton.click()
